@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 var version = "dev" // Overridden by ldflags at build time
@@ -44,7 +45,16 @@ func main() {
 	a := newApp(cfg, sys, hostname)
 	log.Printf("Hostname: %s, user idle threshold: %d seconds", hostname, a.idleThreshold)
 
-	a.newMQTTClient()
+	client := a.newMQTTClient()
 
-	select {}
+	fast := time.NewTicker(2 * time.Second)
+	slow := time.NewTicker(60 * time.Second)
+	for {
+		select {
+		case <-fast.C:
+			a.updateFast(client)
+		case <-slow.C:
+			a.updateSlow(client)
+		}
+	}
 }

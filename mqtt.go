@@ -19,6 +19,7 @@ type app struct {
 	prefix        string // topicRoot + "/" + hostname
 	idleThreshold int
 	warned        sync.Map // sensor name -> struct{}; warnings already logged once
+	net           networkStats
 }
 
 func newApp(cfg *config, sys System, hostname string) *app {
@@ -63,6 +64,9 @@ func (a *app) onConnect(client mqtt.Client) {
 	log.Println("Connected to MQTT")
 
 	a.publish(client, a.prefix+"/status/alive", true, "true")
+
+	a.updateFast(client)
+	a.updateSlow(client)
 }
 
 func (a *app) onConnectionLost(client mqtt.Client, err error) {
