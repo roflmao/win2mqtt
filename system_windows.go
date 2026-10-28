@@ -5,8 +5,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
+	"os/exec"
+	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -19,6 +23,7 @@ var (
 	modUser32   = windows.NewLazySystemDLL("user32.dll")
 	modIphlpapi = windows.NewLazySystemDLL("iphlpapi.dll")
 	modWlanapi  = windows.NewLazySystemDLL("wlanapi.dll")
+	modPowrprof = windows.NewLazySystemDLL("powrprof.dll")
 
 	procGetLastInputInfo     = modUser32.NewProc("GetLastInputInfo")
 	procGetTickCount         = modKernel32.NewProc("GetTickCount")
@@ -31,6 +36,9 @@ var (
 	procWlanEnumInterfaces   = modWlanapi.NewProc("WlanEnumInterfaces")
 	procWlanQueryInterface   = modWlanapi.NewProc("WlanQueryInterface")
 	procWlanFreeMemory       = modWlanapi.NewProc("WlanFreeMemory")
+	procSetSuspendState      = modPowrprof.NewProc("SetSuspendState")
+	procSendMessageTimeoutW  = modUser32.NewProc("SendMessageTimeoutW")
+	procLockWorkStation      = modUser32.NewProc("LockWorkStation")
 )
 
 type windowsSystem struct {
@@ -51,6 +59,10 @@ func newSystem() (System, error) {
 		s.feat.WiFi = true
 		s.wlanHandle = handle
 		s.wlanGUID = guid
+	}
+
+	if err := startMessageLoop(&s.displayOn, &s.locked); err != nil {
+		log.Printf("Warning: display/lock events unavailable, reporting defaults: %v", err)
 	}
 
 	return s, nil
@@ -293,10 +305,46 @@ func (s *windowsSystem) WiFi() (string, int, error) {
 	return string(ssid.SSID[:n]), qualityToRSSI(data.AssociationAttributes.SignalQuality), nil
 }
 
-var errNotImplemented = errors.New("not implemented")
+const (
+	hwndBroadcast   = 0xFFFF
+	wmSysCommand    = 0x0112
+	scMonitorPower  = 0xF170
+	monitorPowerOff = 2
+	smtoAbortIfHung = 0x0002
+)
 
-func (s *windowsSystem) Sleep() error        { return errNotImplemented }
-func (s *windowsSystem) DisplaySleep() error { return errNotImplemented }
-func (s *windowsSystem) Shutdown() error     { return errNotImplemented }
-func (s *windowsSystem) Reboot() error       { return errNotImplemented }
-func (s *windowsSystem) Lock() error         { return errNotImplemented }
+func (s *windowsSystem) Sleep() error {
+	// SetSuspendState(Hibernate=FALSE, ForceCritical=FALSE, DisableWakeEvent=FALSE)
+	if r, _, err := procSetSuspendState.Call(0, 0, 0); r == 0 {
+		return fmt.Errorf("SetSuspendState: %w", err)
+	}
+	return nil
+}
+
+func (s *windowsSystem) DisplaySleep() error {
+	// Broadcast with a timeout so a hung window cannot block us.
+	r, _, err := procSendMessageTimeoutW.Call(hwndBroadcast, wmSysCommand, scMonitorPower, monitorPowerOff, smtoAbortIfHung, 1000, 0)
+	if r == 0 {
+		return fmt.Errorf("SendMessageTimeout: %w", err)
+	}
+	return nil
+}
+
+func (s *windowsSystem) Lock() error {
+	if r, _, err := procLockWorkStation.Call(); r == 0 {
+		return fmt.Errorf("LockWorkStation: %w", err)
+	}
+	return nil
+}
+
+func runShutdown(flag string) error {
+	cmd := exec.Command("shutdown.exe", flag, "/t", "0")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("shutdown.exe %s: %w (%s)", flag, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (s *windowsSystem) Shutdown() error { return runShutdown("/s") }
+func (s *windowsSystem) Reboot() error   { return runShutdown("/r") }
