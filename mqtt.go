@@ -65,6 +65,8 @@ func (a *app) onConnect(client mqtt.Client) {
 
 	a.publish(client, a.prefix+"/status/alive", true, "true")
 
+	a.publishDiscoveryMessages(client)
+
 	a.updateFast(client)
 	a.updateSlow(client)
 
