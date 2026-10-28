@@ -67,6 +67,19 @@ func (a *app) onConnect(client mqtt.Client) {
 
 	a.updateFast(client)
 	a.updateSlow(client)
+
+	a.subscribeCommands(client)
+}
+
+func (a *app) subscribeCommands(client mqtt.Client) {
+	topic := a.prefix + "/command/#"
+	token := client.Subscribe(topic, 0, func(c mqtt.Client, m mqtt.Message) {
+		a.handleCommand(c, m.Topic(), string(m.Payload()))
+	})
+	token.Wait()
+	if err := token.Error(); err != nil {
+		log.Printf("Error subscribing to %s: %v", topic, err)
+	}
 }
 
 func (a *app) onConnectionLost(client mqtt.Client, err error) {
