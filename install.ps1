@@ -31,6 +31,7 @@ $InstallDir = Join-Path $env:LOCALAPPDATA 'win2mqtt'
 $ExeName    = 'win2mqtt.exe'
 $ConfigName = 'win2mqtt.yaml'
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
+$UserName   = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name  # DOMAIN\user, unambiguous on domain-joined PCs
 
 function Write-Info($Message) { Write-Host "[install] $Message" }
 
@@ -84,7 +85,7 @@ if (Test-Path $targetConfig) {
 }
 
 $action = New-ScheduledTaskAction -Execute (Join-Path $InstallDir $ExeName) -WorkingDirectory $InstallDir
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserName
 $settings = New-ScheduledTaskSettingsSet `
     -Hidden `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
@@ -92,8 +93,8 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
-    -MultipleInstances IgnoreNew
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+    -MultipleInstances Queue
+$principal = New-ScheduledTaskPrincipal -UserId $UserName -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
 Write-Info "Registered scheduled task $TaskName (runs at logon)"

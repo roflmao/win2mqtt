@@ -42,7 +42,7 @@ func nativeArch() string {
 func detachedAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: windows.CREATE_NO_WINDOW | windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS,
+		CreationFlags: windows.CREATE_NO_WINDOW | windows.CREATE_NEW_PROCESS_GROUP,
 	}
 }
 
@@ -53,7 +53,7 @@ func relaunch() error {
 	query := exec.Command("schtasks", "/Query", "/TN", scheduledTaskName)
 	query.SysProcAttr = detachedAttr()
 	if err := query.Run(); err == nil {
-		cmd := exec.Command("cmd", "/c", "timeout /t 3 /nobreak >nul & schtasks /Run /TN "+scheduledTaskName)
+		cmd := exec.Command("cmd", "/c", relaunchCommandLine(scheduledTaskName))
 		cmd.SysProcAttr = detachedAttr()
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("start scheduled task relaunch: %w", err)

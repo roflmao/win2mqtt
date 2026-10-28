@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestIsUserActive(t *testing.T) {
 	tests := []struct {
@@ -86,4 +89,13 @@ func TestSanitizeHostname(t *testing.T) {
 			t.Errorf("sanitizeHostname(%q) = %q, want %q", tt.raw, got, tt.want)
 		}
 	}
+}
+
+func mustTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	v, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }

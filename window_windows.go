@@ -182,8 +182,9 @@ func runMessageLoop(displayOn, locked *atomic.Bool, ready chan<- error) {
 
 	var m msg
 	for {
-		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		r, _, err := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) <= 0 { // WM_QUIT or error
+			log.Printf("Warning: event window message loop ended (ret=%d, err=%v); display_on and screen_locked will no longer update", int32(r), err)
 			return
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))

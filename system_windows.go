@@ -9,6 +9,7 @@ import (
 	"net"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -48,11 +49,16 @@ type windowsSystem struct {
 	audio      *audioWorker
 	wlanHandle windows.Handle
 	wlanGUID   windows.GUID
+	bootTime   func() time.Time // computed once; recomputing would drift by up to a second
 }
 
 func newSystem() (System, error) {
 	s := &windowsSystem{audio: startAudioWorker()}
 	s.displayOn.Store(true)
+	s.bootTime = sync.OnceValue(func() time.Time {
+		ms, _, _ := procGetTickCount64.Call()
+		return bootTimeFromUptime(time.Now(), uint64(ms))
+	})
 
 	s.feat.Battery = hasBattery()
 	if handle, guid, ok := openFirstWlanInterface(); ok {
@@ -129,8 +135,7 @@ func (s *windowsSystem) IdleSeconds() (int64, error) {
 }
 
 func (s *windowsSystem) BootTime() (time.Time, error) {
-	ms, _, _ := procGetTickCount64.Call()
-	return time.Now().Add(-time.Duration(ms) * time.Millisecond).Truncate(time.Second), nil
+	return s.bootTime(), nil
 }
 
 // systemPowerStatus mirrors SYSTEM_POWER_STATUS.
@@ -322,9 +327,10 @@ func (s *windowsSystem) Sleep() error {
 }
 
 func (s *windowsSystem) DisplaySleep() error {
-	// Broadcast with a timeout so a hung window cannot block us.
+	// Broadcast with a timeout so a hung window cannot block us. A timeout only
+	// means some window did not answer; the display driver has already acted.
 	r, _, err := procSendMessageTimeoutW.Call(hwndBroadcast, wmSysCommand, scMonitorPower, monitorPowerOff, smtoAbortIfHung, 1000, 0)
-	if r == 0 {
+	if r == 0 && !errors.Is(err, windows.ERROR_TIMEOUT) {
 		return fmt.Errorf("SendMessageTimeout: %w", err)
 	}
 	return nil
