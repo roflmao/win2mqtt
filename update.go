@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -242,16 +243,35 @@ func performUpdate() error {
 	}
 	log.Printf("Update to %s completed successfully", release.TagName)
 
-	if err := relaunch(); err != nil {
-		log.Printf("Warning: could not schedule relaunch: %v", err)
+	if finishUpdate(relaunch) {
+		log.Println("Exiting so the new version can start")
+		os.Exit(0)
 	}
-	log.Println("Exiting so the new version can start")
-	os.Exit(0)
 	return nil
+}
+
+// restartPending is set when a new binary is installed but nothing could be
+// arranged to restart us; further update checks are pointless until then.
+var restartPending atomic.Bool
+
+// finishUpdate schedules the relaunch and reports whether this process should
+// exit. If no relaunch could be scheduled the current process keeps running,
+// since exiting would leave nothing behind until the next logon.
+func finishUpdate(relaunch func() error) bool {
+	if err := relaunch(); err != nil {
+		log.Printf("Warning: could not schedule relaunch: %v. Staying up; the new version starts at the next restart", err)
+		restartPending.Store(true)
+		return false
+	}
+	return true
 }
 
 // checkAndApplyUpdate is the entry point for scheduled update checks.
 func checkAndApplyUpdate() {
+	if restartPending.Load() {
+		log.Println("Update already installed, waiting for restart")
+		return
+	}
 	log.Println("Checking for updates...")
 	if err := performUpdate(); err != nil {
 		log.Printf("Update failed: %v (will retry in 1 hour)", err)

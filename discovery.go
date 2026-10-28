@@ -131,14 +131,27 @@ func (a *app) publishDiscoveryMessages(client mqtt.Client) {
 		"sw_version":   version,
 	}
 
+	configTopic := func(e discoveryEntity) string {
+		return fmt.Sprintf("homeassistant/%s/%s_%s/%s/config", e.component, topicRoot, a.hostname, e.objectID)
+	}
+
+	present := map[string]bool{}
 	for _, e := range discoveryEntities(a.hostname, a.prefix, a.sys.Features(), device) {
-		topic := fmt.Sprintf("homeassistant/%s/%s_%s/%s/config", e.component, topicRoot, a.hostname, e.objectID)
+		present[e.objectID] = true
 		payload, err := json.Marshal(e.config)
 		if err != nil {
 			log.Printf("Error marshaling discovery config for %s: %v", e.objectID, err)
 			continue
 		}
-		a.publish(client, topic, true, string(payload))
+		a.publish(client, configTopic(e), true, string(payload))
+	}
+
+	// Hardware that was announced on an earlier run but is gone now must be
+	// removed from the broker, or Home Assistant keeps the stale entities.
+	for _, e := range discoveryEntities(a.hostname, a.prefix, Features{Battery: true, WiFi: true}, device) {
+		if !present[e.objectID] {
+			a.publish(client, configTopic(e), true, "")
+		}
 	}
 
 	log.Println("Published Home Assistant MQTT discovery messages")

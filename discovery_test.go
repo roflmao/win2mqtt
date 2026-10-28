@@ -69,8 +69,14 @@ func TestPublishDiscoveryTopics(t *testing.T) {
 
 	a.publishDiscoveryMessages(rc)
 
-	if rc.count() != 18 {
-		t.Fatalf("published %d messages, want 18", rc.count())
+	configs := 0
+	for _, m := range rc.msgs {
+		if m.payload != "" {
+			configs++
+		}
+	}
+	if configs != 18 {
+		t.Fatalf("published %d configs, want 18", configs)
 	}
 	msg, ok := rc.find("homeassistant/button/win2mqtt_h/lock/config")
 	if !ok || !msg.retained {
@@ -86,5 +92,27 @@ func TestPublishDiscoveryTopics(t *testing.T) {
 	}
 	if len(cfg.Device.Identifiers) != 1 || cfg.Device.Identifiers[0] != "win2mqtt_h" {
 		t.Fatalf("device identifiers = %v", cfg.Device.Identifiers)
+	}
+}
+
+func TestPublishDiscoveryClearsAbsentOptionalEntities(t *testing.T) {
+	a := newTestApp(t, newFakeSystem()) // Features{}: no battery, no Wi-Fi
+	rc := &recordingClient{}
+
+	a.publishDiscoveryMessages(rc)
+
+	for _, topic := range []string{
+		"homeassistant/sensor/win2mqtt_h/battery/config",
+		"homeassistant/sensor/win2mqtt_h/wifi_ssid/config",
+		"homeassistant/sensor/win2mqtt_h/wifi_signal_strength/config",
+	} {
+		msg, ok := rc.find(topic)
+		if !ok {
+			t.Errorf("%s: no clearing publish for absent hardware", topic)
+			continue
+		}
+		if msg.payload != "" || !msg.retained {
+			t.Errorf("%s: want empty retained payload, got %+v", topic, msg)
+		}
 	}
 }

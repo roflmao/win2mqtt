@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -56,5 +58,33 @@ func TestFindAssetForCurrentPlatform(t *testing.T) {
 
 	if _, err := findAssetForCurrentPlatform(&GitHubRelease{}); err == nil {
 		t.Fatal("expected error for release without assets")
+	}
+}
+
+func TestFinishUpdateKeepsRunningWhenRelaunchFails(t *testing.T) {
+	buf := captureLog(t)
+	restartPending.Store(false)
+	t.Cleanup(func() { restartPending.Store(false) })
+
+	exit := finishUpdate(func() error { return errors.New("no task, no exec") })
+
+	if exit {
+		t.Fatal("process must not exit when nothing will restart it")
+	}
+	if !restartPending.Load() {
+		t.Fatal("restartPending should be set so further update checks are skipped")
+	}
+	buf.Reset()
+	checkAndApplyUpdate()
+	if !strings.Contains(buf.String(), "waiting for restart") {
+		t.Fatalf("update check should be skipped while a restart is pending, got:\n%s", buf.String())
+	}
+}
+
+func TestFinishUpdateExitsWhenRelaunchScheduled(t *testing.T) {
+	captureLog(t)
+	t.Cleanup(func() { restartPending.Store(false) })
+	if !finishUpdate(func() error { return nil }) {
+		t.Fatal("process should exit once the relaunch is scheduled")
 	}
 }

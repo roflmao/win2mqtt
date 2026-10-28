@@ -318,7 +318,38 @@ const (
 	smtoAbortIfHung = 0x0002
 )
 
+// enablePrivilege turns on a privilege the interactive user holds but that is
+// disabled by default in the token, such as SeShutdownPrivilege.
+func enablePrivilege(name string) error {
+	var token windows.Token
+	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_ADJUST_PRIVILEGES|windows.TOKEN_QUERY, &token); err != nil {
+		return fmt.Errorf("OpenProcessToken: %w", err)
+	}
+	defer token.Close()
+
+	privName, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return err
+	}
+	var luid windows.LUID
+	if err := windows.LookupPrivilegeValue(nil, privName, &luid); err != nil {
+		return fmt.Errorf("LookupPrivilegeValue %s: %w", name, err)
+	}
+	tp := windows.Tokenprivileges{
+		PrivilegeCount: 1,
+		Privileges:     [1]windows.LUIDAndAttributes{{Luid: luid, Attributes: windows.SE_PRIVILEGE_ENABLED}},
+	}
+	if err := windows.AdjustTokenPrivileges(token, false, &tp, 0, nil, nil); err != nil {
+		return fmt.Errorf("AdjustTokenPrivileges %s: %w", name, err)
+	}
+	return nil
+}
+
 func (s *windowsSystem) Sleep() error {
+	// SetSuspendState requires SE_SHUTDOWN_NAME to be enabled in the caller's token.
+	if err := enablePrivilege("SeShutdownPrivilege"); err != nil {
+		log.Printf("Warning: %v", err)
+	}
 	// SetSuspendState(Hibernate=FALSE, ForceCritical=FALSE, DisableWakeEvent=FALSE)
 	if r, _, err := procSetSuspendState.Call(0, 0, 0); r == 0 {
 		return fmt.Errorf("SetSuspendState: %w", err)
