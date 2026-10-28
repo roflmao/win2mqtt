@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"runtime"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -26,8 +27,8 @@ func nativeArch() string {
 	var processMachine, nativeMachine uint16
 	r, _, _ := procIsWow64Process2.Call(
 		uintptr(windows.CurrentProcess()),
-		uintptr(unsafePointer(&processMachine)),
-		uintptr(unsafePointer(&nativeMachine)),
+		uintptr(unsafe.Pointer(&processMachine)),
+		uintptr(unsafe.Pointer(&nativeMachine)),
 	)
 	if r == 0 {
 		return runtime.GOARCH
