@@ -120,3 +120,43 @@ func TestNewMQTTClientDryRunUsesDummy(t *testing.T) {
 		t.Fatalf("expected *dummyClient, got %T", client)
 	}
 }
+
+// fakeMessage satisfies mqtt.Message for subscription callbacks.
+type fakeMessage struct {
+	topic    string
+	payload  string
+	retained bool
+}
+
+func (m fakeMessage) Duplicate() bool   { return false }
+func (m fakeMessage) Qos() byte         { return 0 }
+func (m fakeMessage) Retained() bool    { return m.retained }
+func (m fakeMessage) Topic() string     { return m.topic }
+func (m fakeMessage) MessageID() uint16 { return 0 }
+func (m fakeMessage) Payload() []byte   { return []byte(m.payload) }
+func (m fakeMessage) Ack()              {}
+
+func TestRetainedCommandsAreIgnored(t *testing.T) {
+	buf := captureLog(t)
+	sys := newFakeSystem()
+	a := newTestApp(t, sys)
+	rc := &recordingClient{}
+	a.subscribeCommands(rc)
+	handler := rc.subscribed["win2mqtt/h/command/#"]
+	if handler == nil {
+		t.Fatal("command topic not subscribed")
+	}
+
+	handler(rc, fakeMessage{topic: "win2mqtt/h/command/shutdown", payload: "shutdown", retained: true})
+	if len(sys.calls) != 0 {
+		t.Fatalf("retained command executed: %v", sys.calls)
+	}
+	if !strings.Contains(buf.String(), "Ignoring retained command") {
+		t.Fatalf("expected log line, got:\n%s", buf.String())
+	}
+
+	handler(rc, fakeMessage{topic: "win2mqtt/h/command/shutdown", payload: "shutdown"})
+	if len(sys.calls) != 1 || sys.calls[0] != "shutdown" {
+		t.Fatalf("live command not executed: %v", sys.calls)
+	}
+}

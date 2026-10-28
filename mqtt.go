@@ -76,6 +76,11 @@ func (a *app) onConnect(client mqtt.Client) {
 func (a *app) subscribeCommands(client mqtt.Client) {
 	topic := a.prefix + "/command/#"
 	token := client.Subscribe(topic, 0, func(c mqtt.Client, m mqtt.Message) {
+		// A retained command would replay (e.g. shut the PC down) on every reconnect.
+		if m.Retained() {
+			log.Printf("Ignoring retained command %s", m.Topic())
+			return
+		}
 		a.handleCommand(c, m.Topic(), string(m.Payload()))
 	})
 	token.Wait()
