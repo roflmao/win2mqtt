@@ -8,6 +8,12 @@ on:
 permissions:
   contents: write
 
+# One release job at a time: overlapping jobs would compute the same next
+# version and the unforced CHANGELOG push of the later one would be rejected.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   build-and-release:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"

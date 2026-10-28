@@ -50,10 +50,15 @@ func detachedAttr() *syscall.SysProcAttr {
 // the task is re-run so the new process stays supervised; otherwise the new
 // executable is started directly.
 func relaunch() error {
+	exePath, err := getCurrentExecutablePath()
+	if err != nil {
+		return err
+	}
+
 	query := exec.Command("schtasks", "/Query", "/TN", scheduledTaskName)
 	query.SysProcAttr = detachedAttr()
 	if err := query.Run(); err == nil {
-		cmd := exec.Command("cmd", "/c", relaunchCommandLine(scheduledTaskName))
+		cmd := exec.Command("cmd", "/c", relaunchCommandLine(scheduledTaskName, exePath))
 		cmd.SysProcAttr = detachedAttr()
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("start scheduled task relaunch: %w", err)
@@ -62,10 +67,6 @@ func relaunch() error {
 		return nil
 	}
 
-	exePath, err := getCurrentExecutablePath()
-	if err != nil {
-		return err
-	}
 	cmd := exec.Command(exePath)
 	cmd.SysProcAttr = detachedAttr()
 	if err := cmd.Start(); err != nil {

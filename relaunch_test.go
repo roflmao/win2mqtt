@@ -6,7 +6,7 @@ import (
 )
 
 func TestRelaunchCommandLineWorksWithoutConsole(t *testing.T) {
-	cmd := relaunchCommandLine("win2mqtt")
+	cmd := relaunchCommandLine("win2mqtt", `C:\Apps\win2mqtt.exe`)
 
 	// timeout.exe refuses to run when stdin is not a console, which is always the
 	// case for a detached child of a GUI-subsystem process.
@@ -18,6 +18,11 @@ func TestRelaunchCommandLineWorksWithoutConsole(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "schtasks /Run /TN win2mqtt") {
 		t.Fatalf("relaunch must re-run the scheduled task: %q", cmd)
+	}
+	// If the task run fails (task disabled or deleted meanwhile) the shell must
+	// start the executable directly, since the old process has already exited.
+	if !strings.Contains(cmd, `|| start "" "C:\Apps\win2mqtt.exe"`) {
+		t.Fatalf("relaunch must fall back to starting the exe: %q", cmd)
 	}
 }
 
