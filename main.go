@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -42,19 +43,40 @@ func main() {
 		log.Fatalf("cannot initialise system access: %v", err)
 	}
 
+	cleanupOldBinary()
+
 	a := newApp(cfg, sys, hostname)
 	log.Printf("Hostname: %s, user idle threshold: %d seconds", hostname, a.idleThreshold)
 
 	client := a.newMQTTClient()
 
+	autoUpdate := cfg.isAutoUpdateEnabled() && runtime.GOOS == "windows"
+	switch {
+	case autoUpdate:
+		log.Println("Auto-update enabled (checks every hour)")
+		go func() {
+			time.Sleep(30 * time.Second)
+			checkAndApplyUpdate()
+		}()
+	case cfg.isAutoUpdateEnabled():
+		log.Println("Auto-update only supported on Windows")
+	default:
+		log.Println("Auto-update disabled")
+	}
+
 	fast := time.NewTicker(2 * time.Second)
 	slow := time.NewTicker(60 * time.Second)
+	update := time.NewTicker(time.Hour)
 	for {
 		select {
 		case <-fast.C:
 			a.updateFast(client)
 		case <-slow.C:
 			a.updateSlow(client)
+		case <-update.C:
+			if autoUpdate {
+				go checkAndApplyUpdate()
+			}
 		}
 	}
 }
