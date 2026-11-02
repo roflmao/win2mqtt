@@ -109,6 +109,10 @@ jobs:
           git commit -am "[skip ci] Update CHANGELOG for ${VERSION}"
           git push origin HEAD:${{ github.ref }}
 
+      - name: Record release commit
+        id: release_commit
+        run: echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
       - name: Build for Windows (AMD64)
         run: |
           VERSION=${{ steps.version.outputs.version }}
@@ -123,6 +127,9 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.version }}
+          # Pin the tag to the commit this run built (incl. the CHANGELOG commit),
+          # not to whatever master points at by the time the release is created.
+          target_commitish: ${{ steps.release_commit.outputs.sha }}
           name: Release ${{ steps.version.outputs.version }}
           body: |
             Automated release for commit ${{ github.sha }}
