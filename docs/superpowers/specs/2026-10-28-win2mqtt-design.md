@@ -119,7 +119,7 @@ read from registry `HKLM\HARDWARE\DESCRIPTION\System\BIOS` (`SystemManufacturer`
 - Self-update (ported from mac2mqtt, repo `roflmao/win2mqtt`, asset
   `win2mqtt-windows-<arch>.exe`): rename running exe to `.old` (allowed on Windows),
   move new exe in, then **restart through the Scheduled Task** so the new process stays
-  supervised: spawn `cmd /c timeout /t 3 && schtasks /Run /TN win2mqtt` detached
+  supervised: spawn `cmd /c ping -n 4 127.0.0.1 >nul & schtasks /Run /TN win2mqtt` detached
   (`CREATE_NO_WINDOW`), then exit 0. The task goes Ready when the old process exits and
   `schtasks /Run` starts the new exe under the scheduler (≈3 s gap). If the task does
   not exist (manual run), fall back to spawning the new exe detached. Delete stale
@@ -145,7 +145,7 @@ read from registry `HKLM\HARDWARE\DESCRIPTION\System\BIOS` (`SystemManufacturer`
    exe with working dir set, settings: Hidden, ExecutionTimeLimit 0, RestartCount 3 /
    RestartInterval 1 min (crash safety net; self-update does not consume it because it
    exits 0 and relaunches via `schtasks /Run`), AllowStartIfOnBatteries,
-   DontStopIfGoingOnBatteries, MultipleInstances IgnoreNew. Run level: limited
+   DontStopIfGoingOnBatteries, MultipleInstances Queue. Run level: limited
    (shutdown/sleep/lock do not need elevation for an interactive user).
 3. Start the task. On re-install, stop the task first so the exe can be replaced.
 `install.ps1 -Uninstall` stops and unregisters the task, kills any stray `win2mqtt.exe`

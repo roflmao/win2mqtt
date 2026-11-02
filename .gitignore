@@ -1,0 +1,4 @@
+win2mqtt.yaml
+*.exe
+*.log
+*.old

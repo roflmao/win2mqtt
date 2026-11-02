@@ -1,0 +1,156 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+# One release job at a time, every push kept: overlapping jobs would compute
+# the same next version and the unforced CHANGELOG push of the later one would
+# be rejected; the default single-slot queue would drop intermediate pushes.
+concurrency:
+  group: release
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  build-and-release:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Vet and test
+        run: |
+          go vet ./...
+          go test ./...
+          GOOS=windows go vet ./...
+          GOOS=windows go test -c -o /dev/null .
+
+      - name: Generate version tag
+        id: version
+        run: |
+          # Check if HEAD already has a version tag (manual tag)
+          CURRENT_TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          if [ -n "$CURRENT_TAG" ]; then
+            echo "HEAD already has version tag: $CURRENT_TAG"
+            echo "Using it as the release version; CHANGELOG is left to the committer"
+            echo "version=$CURRENT_TAG" >> $GITHUB_OUTPUT
+            echo "skip_changelog=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Get the latest tag matching v*.*.* pattern
+          LATEST_TAG=$(git tag -l "v*.*.*" | sort -V | tail -n1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            # No existing tags, start with v1.0.0
+            VERSION="v1.0.0"
+          else
+            # Parse the version and increment patch number
+            echo "Latest tag: $LATEST_TAG"
+
+            # Remove 'v' prefix and split into major.minor.patch
+            VERSION_NUM="${LATEST_TAG#v}"
+            MAJOR=$(echo $VERSION_NUM | cut -d. -f1)
+            MINOR=$(echo $VERSION_NUM | cut -d. -f2)
+            PATCH=$(echo $VERSION_NUM | cut -d. -f3)
+
+            # Increment patch version
+            PATCH=$((PATCH + 1))
+            VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "previous_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION"
+
+      - name: Update CHANGELOG.md
+        if: steps.version.outputs.skip_changelog != 'true'
+        run: |
+          set -euo pipefail
+          VERSION=${{ steps.version.outputs.version }}
+          PREVIOUS_TAG=${{ steps.version.outputs.previous_tag }}
+          RELEASE_DATE=$(date +%Y-%m-%d)
+
+          ARGS=(--version "$VERSION" --release-date "$RELEASE_DATE")
+          if [ -n "$PREVIOUS_TAG" ]; then
+            ARGS+=(--previous-tag "$PREVIOUS_TAG")
+          fi
+
+          python3 .github/scripts/update_changelog.py "${ARGS[@]}"
+
+      - name: Commit CHANGELOG update
+        if: steps.version.outputs.skip_changelog != 'true'
+        run: |
+          set -euo pipefail
+          VERSION=${{ steps.version.outputs.version }}
+
+          if git diff --quiet CHANGELOG.md; then
+            echo "CHANGELOG.md already up to date."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "[skip ci] Update CHANGELOG for ${VERSION}"
+          git push origin HEAD:${{ github.ref }}
+
+      - name: Record release commit
+        id: release_commit
+        run: echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build for Windows (AMD64)
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-H windowsgui -X main.version=${VERSION}" -o win2mqtt-windows-amd64.exe .
+
+      - name: Build for Windows (ARM64)
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-H windowsgui -X main.version=${VERSION}" -o win2mqtt-windows-arm64.exe .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          # Pin the tag to the commit this run built (incl. the CHANGELOG commit),
+          # not to whatever master points at by the time the release is created.
+          target_commitish: ${{ steps.release_commit.outputs.sha }}
+          name: Release ${{ steps.version.outputs.version }}
+          body: |
+            Automated release for commit ${{ github.sha }}
+
+            ## Changes
+            ${{ github.event.head_commit.message }}
+
+            ## Downloads
+            - **Windows (x64)**: win2mqtt-windows-amd64.exe
+            - **Windows (ARM64)**: win2mqtt-windows-arm64.exe
+
+            ## Installation
+            1. Download the binary for your PC and rename it to `win2mqtt.exe`
+            2. Download `install.ps1` and `win2mqtt.yaml.example`, copy the example to `win2mqtt.yaml` and fill in your broker settings
+            3. In PowerShell: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass; .\install.ps1`
+          draft: false
+          prerelease: false
+          files: |
+            win2mqtt-windows-amd64.exe
+            win2mqtt-windows-arm64.exe
+            install.ps1
+            win2mqtt.yaml.example
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
