@@ -151,6 +151,9 @@ func (a *app) newMQTTClient() mqtt.Client {
 	opts.OnConnect = a.onConnect
 	opts.OnConnectionLost = a.onConnectionLost
 	opts.SetWill(a.prefix+"/status/alive", "false", 0, true)
+	// Publish itself can block on Paho's outbound channel when the TCP writer
+	// stalls; bound that so a sensor pass always finishes.
+	opts.SetWriteTimeout(publishTimeout)
 	opts.SetAutoReconnect(true)
 	opts.SetMaxReconnectInterval(60 * time.Second)
 	opts.SetConnectRetryInterval(5 * time.Second)

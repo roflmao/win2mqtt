@@ -64,19 +64,13 @@ func main() {
 		log.Println("Auto-update disabled")
 	}
 
-	fast := time.NewTicker(2 * time.Second)
-	slow := time.NewTicker(60 * time.Second)
-	update := time.NewTicker(time.Hour)
-	for {
-		select {
-		case <-fast.C:
-			a.updateFast(client)
-		case <-slow.C:
-			a.updateSlow(client)
-		case <-update.C:
-			if autoUpdate {
-				go checkAndApplyUpdate()
-			}
-		}
+	// Each schedule runs independently and skips ticks while busy, so a slow
+	// audio call or a stalled publish cannot hold up the other schedules.
+	go runOnTicks(time.NewTicker(2*time.Second).C, func() { a.updateFast(client) })
+	go runOnTicks(time.NewTicker(60*time.Second).C, func() { a.updateSlow(client) })
+	if autoUpdate {
+		go runOnTicks(time.NewTicker(time.Hour).C, checkAndApplyUpdate)
 	}
+
+	select {}
 }

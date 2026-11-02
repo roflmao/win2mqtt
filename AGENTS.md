@@ -83,7 +83,10 @@ Keep topic names and payload formats stable once released.
 
 - After startup nothing may call `log.Fatal`; sensors and commands log and
   carry on.
-- No WMI or PowerShell at runtime; the 2 s loop must never block on a slow call.
+- No WMI or PowerShell at runtime. Every OS or broker call made from a
+  schedule must be bounded (audio worker timeout, Paho write timeout); the
+  fast, slow and update schedules run independently and skip ticks while busy
+  (`runOnTicks`), so one slow source never stalls the others.
 - Windows-only code lives in `*_windows.go`; everything else must compile and
   be tested on Linux.
 - Retained messages on command topics are ignored on purpose.
