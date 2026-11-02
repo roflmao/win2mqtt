@@ -11,9 +11,13 @@ import (
 
 const topicRoot = "win2mqtt"
 
-// publishTimeout bounds how long a publish may block the update loop; a stalled
-// broker write must not stop every other sensor from being refreshed.
+// publishTimeout is how long an outstanding publish is given before its
+// failure is logged. Waiting happens off the update loop, so a stalled broker
+// write never delays other sensors.
 var publishTimeout = 5 * time.Second
+
+// commandQueueSize bounds commands waiting for the single command worker.
+const commandQueueSize = 32
 
 // app wires the config, the operating system and the MQTT client together.
 type app struct {
@@ -24,6 +28,14 @@ type app struct {
 	idleThreshold int
 	warned        sync.Map // sensor name -> struct{}; warnings already logged once
 	net           networkStats
+	commands      chan queuedCommand
+	workerOnce    sync.Once
+}
+
+type queuedCommand struct {
+	client  mqtt.Client
+	topic   string
+	payload string
 }
 
 func newApp(cfg *config, sys System, hostname string) *app {
@@ -47,13 +59,17 @@ func (a *app) publish(client mqtt.Client, topic string, retained bool, payload s
 	}
 
 	token := client.Publish(topic, 0, retained, payload)
-	if !token.WaitTimeout(publishTimeout) {
-		log.Printf("Publish to %s timed out after %v", topic, publishTimeout)
-		return
-	}
-	if err := token.Error(); err != nil {
-		log.Printf("Error publishing to %s: %v", topic, err)
-	}
+	// QoS 0: nothing to wait for on success. Report failures without holding
+	// up the caller, so one stalled write cannot block the whole update cycle.
+	go func() {
+		if !token.WaitTimeout(publishTimeout) {
+			log.Printf("Publish to %s timed out after %v", topic, publishTimeout)
+			return
+		}
+		if err := token.Error(); err != nil {
+			log.Printf("Error publishing to %s: %v", topic, err)
+		}
+	}()
 }
 
 // warnOnce logs the first failure of a sensor; later failures only appear in debug mode.
@@ -80,7 +96,22 @@ func (a *app) onConnect(client mqtt.Client) {
 	a.subscribeCommands(client)
 }
 
+// startCommandWorker runs commands one at a time, in arrival order, off the
+// Paho callback: commands can take seconds (audio) or suspend the machine.
+func (a *app) startCommandWorker() {
+	a.workerOnce.Do(func() {
+		a.commands = make(chan queuedCommand, commandQueueSize)
+		go func() {
+			for cmd := range a.commands {
+				a.handleCommand(cmd.client, cmd.topic, cmd.payload)
+			}
+		}()
+	})
+}
+
 func (a *app) subscribeCommands(client mqtt.Client) {
+	a.startCommandWorker()
+
 	topic := a.prefix + "/command/#"
 	token := client.Subscribe(topic, 0, func(c mqtt.Client, m mqtt.Message) {
 		// A retained command would replay (e.g. shut the PC down) on every reconnect.
@@ -88,9 +119,11 @@ func (a *app) subscribeCommands(client mqtt.Client) {
 			log.Printf("Ignoring retained command %s", m.Topic())
 			return
 		}
-		// Paho's ordered message router must not block: commands can take
-		// seconds (audio) or suspend the machine, and they publish replies.
-		go a.handleCommand(c, m.Topic(), string(m.Payload()))
+		select {
+		case a.commands <- queuedCommand{client: c, topic: m.Topic(), payload: string(m.Payload())}:
+		default:
+			log.Printf("Command queue full, dropping %s", m.Topic())
+		}
 	})
 	token.Wait()
 	if err := token.Error(); err != nil {

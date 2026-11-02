@@ -68,12 +68,38 @@ func (r *recordingClient) count() int {
 	return len(r.msgs)
 }
 
-func captureLog(t *testing.T) *bytes.Buffer {
+// syncBuffer is a bytes.Buffer safe for use as a log sink read by tests while
+// background goroutines are still logging.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
+func captureLog(t *testing.T) *syncBuffer {
 	t.Helper()
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(log.Writer()) })
-	return &buf
+	buf := &syncBuffer{}
+	previous := log.Writer()
+	log.SetOutput(buf)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	return buf
 }
 
 func newTestApp(t *testing.T, sys System) *app {
@@ -192,12 +218,30 @@ func TestPublishReturnsWhenBrokerWriteStalls(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("publish blocked the caller on a stalled token")
+	case <-time.After(20 * time.Millisecond):
+		t.Fatal("publish must not block the caller while a token is outstanding")
 	}
-	if !strings.Contains(buf.String(), "timed out") {
-		t.Fatalf("expected a timeout log line, got:\n%s", buf.String())
+	waitFor(t, func() bool { return strings.Contains(buf.String(), "timed out") })
+}
+
+func TestCommandsRunInArrivalOrder(t *testing.T) {
+	captureLog(t)
+	sys := newFakeSystem()
+	sys.blockLock = make(chan struct{})
+	a := newTestApp(t, sys)
+	rc := &recordingClient{}
+	a.subscribeCommands(rc)
+	handler := rc.subscribed["win2mqtt/h/command/#"]
+
+	handler(rc, fakeMessage{topic: "win2mqtt/h/command/lock", payload: "lock"})
+	handler(rc, fakeMessage{topic: "win2mqtt/h/command/volume", payload: "70"})
+
+	time.Sleep(50 * time.Millisecond)
+	if v, _ := sys.Volume(); v != 42 { // still 42: volume must wait for the lock command ahead of it
+		t.Fatalf("volume applied out of order: %d", v)
 	}
+	close(sys.blockLock)
+	waitFor(t, func() bool { v, _ := sys.Volume(); return v == 70 })
 }
 
 func TestCommandCallbackReturnsBeforeCommandFinishes(t *testing.T) {

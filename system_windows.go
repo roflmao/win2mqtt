@@ -47,8 +47,7 @@ type windowsSystem struct {
 	displayOn  atomic.Bool
 	locked     atomic.Bool
 	audio      *audioWorker
-	wlanHandle windows.Handle
-	wlanGUID   windows.GUID
+	wlanHandle windows.Handle   // open when feat.WiFi
 	bootTime   func() time.Time // computed once; recomputing would drift by up to a second
 }
 
@@ -61,10 +60,9 @@ func newSystem() (System, error) {
 	})
 
 	s.feat.Battery = hasBattery()
-	if handle, guid, ok := openFirstWlanInterface(); ok {
+	if handle, ok := openWlanWithInterfaces(); ok {
 		s.feat.WiFi = true
 		s.wlanHandle = handle
-		s.wlanGUID = guid
 	}
 
 	if err := startMessageLoop(&s.displayOn, &s.locked); err != nil {
@@ -260,54 +258,99 @@ const (
 	wlanInterfaceStateConnected = 1
 )
 
-func openFirstWlanInterface() (windows.Handle, windows.GUID, bool) {
+var procWlanCloseHandle = modWlanapi.NewProc("WlanCloseHandle")
+
+// openWlanWithInterfaces opens a WLAN client handle and reports whether at
+// least one Wi-Fi adapter exists. Without adapters the handle is closed again.
+func openWlanWithInterfaces() (windows.Handle, bool) {
 	var negotiated uint32
 	var handle windows.Handle
 	if r, _, _ := procWlanOpenHandle.Call(2, 0, uintptr(unsafe.Pointer(&negotiated)), uintptr(unsafe.Pointer(&handle))); r != 0 {
-		return 0, windows.GUID{}, false
+		return 0, false
 	}
+	guids, err := wlanInterfaces(handle)
+	if err != nil || len(guids) == 0 {
+		procWlanCloseHandle.Call(uintptr(handle), 0)
+		return 0, false
+	}
+	return handle, true
+}
 
+// wlanInterfaces lists the GUIDs of all Wi-Fi adapters.
+func wlanInterfaces(handle windows.Handle) ([]windows.GUID, error) {
 	var list *wlanInterfaceInfoList
 	if r, _, _ := procWlanEnumInterfaces.Call(uintptr(handle), 0, uintptr(unsafe.Pointer(&list))); r != 0 || list == nil {
-		return 0, windows.GUID{}, false
+		return nil, fmt.Errorf("WlanEnumInterfaces failed with code %d", r)
 	}
 	defer procWlanFreeMemory.Call(uintptr(unsafe.Pointer(list)))
 
-	if list.NumberOfItems == 0 {
-		return 0, windows.GUID{}, false
+	infos := unsafe.Slice(&list.InterfaceInfo[0], int(list.NumberOfItems))
+	guids := make([]windows.GUID, 0, len(infos))
+	for i := range infos {
+		guids = append(guids, infos[i].Guid)
 	}
-	return handle, list.InterfaceInfo[0].Guid, true
+	return guids, nil
 }
 
-func (s *windowsSystem) WiFi() (string, int, error) {
-	if !s.feat.WiFi {
-		return "", 0, errNoWiFi
-	}
+const errorInvalidState = 5023 // ERROR_INVALID_STATE: adapter not connected
+
+// wlanCurrentConnection queries one adapter; ok is false when it is not connected.
+func (s *windowsSystem) wlanCurrentConnection(guid windows.GUID) (ssid string, rssi int, ok bool, err error) {
 	var size uint32
 	var data *wlanConnectionAttributes
 	r, _, _ := procWlanQueryInterface.Call(
 		uintptr(s.wlanHandle),
-		uintptr(unsafe.Pointer(&s.wlanGUID)),
+		uintptr(unsafe.Pointer(&guid)),
 		wlanOpcodeCurrentConnection,
 		0,
 		uintptr(unsafe.Pointer(&size)),
 		uintptr(unsafe.Pointer(&data)),
 		0,
 	)
+	if r == errorInvalidState {
+		return "", 0, false, nil
+	}
 	if r != 0 || data == nil {
-		return "", 0, fmt.Errorf("WlanQueryInterface failed with code %d", r)
+		return "", 0, false, fmt.Errorf("WlanQueryInterface failed with code %d", r)
 	}
 	defer procWlanFreeMemory.Call(uintptr(unsafe.Pointer(data)))
 
 	if data.State != wlanInterfaceStateConnected {
-		return "", 0, errors.New("Wi-Fi not connected")
+		return "", 0, false, nil
 	}
-	ssid := data.AssociationAttributes.SSID
-	n := ssid.Length
-	if n > uint32(len(ssid.SSID)) {
-		n = uint32(len(ssid.SSID))
+	raw := data.AssociationAttributes.SSID
+	n := raw.Length
+	if n > uint32(len(raw.SSID)) {
+		n = uint32(len(raw.SSID))
 	}
-	return string(ssid.SSID[:n]), qualityToRSSI(data.AssociationAttributes.SignalQuality), nil
+	return string(raw.SSID[:n]), qualityToRSSI(data.AssociationAttributes.SignalQuality), true, nil
+}
+
+// WiFi returns the SSID and signal of whichever adapter is connected, so a
+// disconnected first adapter does not hide a connected second one.
+func (s *windowsSystem) WiFi() (string, int, error) {
+	if !s.feat.WiFi {
+		return "", 0, errNoWiFi
+	}
+	guids, err := wlanInterfaces(s.wlanHandle)
+	if err != nil {
+		return "", 0, err
+	}
+	var lastErr error
+	for _, guid := range guids {
+		ssid, rssi, ok, err := s.wlanCurrentConnection(guid)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if ok {
+			return ssid, rssi, nil
+		}
+	}
+	if lastErr != nil {
+		return "", 0, lastErr
+	}
+	return "", 0, errors.New("Wi-Fi not connected")
 }
 
 const (
