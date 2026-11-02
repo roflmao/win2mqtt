@@ -29,8 +29,15 @@ func TestRunOnTicksSkipsWhileBusy(t *testing.T) {
 	}
 
 	close(release)
-	ticks <- time.Now()
-	waitFor(t, func() bool { return calls.Load() == 2 })
+	// The busy slot is released asynchronously after fn returns, so a tick
+	// that lands in that window is skipped; keep ticking until the run starts.
+	waitFor(t, func() bool {
+		select {
+		case ticks <- time.Now():
+		default:
+		}
+		return calls.Load() == 2
+	})
 
 	close(ticks)
 	select {
