@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,7 +14,21 @@ type fakeSystem struct {
 	feat      Features
 	volumeErr error
 	counters  [][2]int64
+	callsMu   sync.Mutex
 	calls     []string
+	blockLock chan struct{} // when set, Lock() waits until it is closed
+}
+
+func (f *fakeSystem) record(name string) {
+	f.callsMu.Lock()
+	defer f.callsMu.Unlock()
+	f.calls = append(f.calls, name)
+}
+
+func (f *fakeSystem) callCount() int {
+	f.callsMu.Lock()
+	defer f.callsMu.Unlock()
+	return len(f.calls)
 }
 
 func (f *fakeSystem) Features() Features { return f.feat }
@@ -48,11 +63,17 @@ func (f *fakeSystem) WiFi() (string, int, error) {
 	return "", 0, errNoWiFi
 }
 
-func (f *fakeSystem) Sleep() error        { f.calls = append(f.calls, "sleep"); return nil }
-func (f *fakeSystem) DisplaySleep() error { f.calls = append(f.calls, "displaysleep"); return nil }
-func (f *fakeSystem) Shutdown() error     { f.calls = append(f.calls, "shutdown"); return nil }
-func (f *fakeSystem) Reboot() error       { f.calls = append(f.calls, "reboot"); return nil }
-func (f *fakeSystem) Lock() error         { f.calls = append(f.calls, "lock"); return nil }
+func (f *fakeSystem) Sleep() error        { f.record("sleep"); return nil }
+func (f *fakeSystem) DisplaySleep() error { f.record("displaysleep"); return nil }
+func (f *fakeSystem) Shutdown() error     { f.record("shutdown"); return nil }
+func (f *fakeSystem) Reboot() error       { f.record("reboot"); return nil }
+func (f *fakeSystem) Lock() error {
+	if f.blockLock != nil {
+		<-f.blockLock
+	}
+	f.record("lock")
+	return nil
+}
 
 func newFakeSystem() *fakeSystem {
 	return &fakeSystem{stubSystem: stubSystem{volume: 42}}

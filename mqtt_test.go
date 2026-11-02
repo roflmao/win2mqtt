@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
@@ -148,15 +149,89 @@ func TestRetainedCommandsAreIgnored(t *testing.T) {
 	}
 
 	handler(rc, fakeMessage{topic: "win2mqtt/h/command/shutdown", payload: "shutdown", retained: true})
-	if len(sys.calls) != 0 {
-		t.Fatalf("retained command executed: %v", sys.calls)
-	}
 	if !strings.Contains(buf.String(), "Ignoring retained command") {
 		t.Fatalf("expected log line, got:\n%s", buf.String())
 	}
+	time.Sleep(50 * time.Millisecond)
+	if n := sys.callCount(); n != 0 {
+		t.Fatalf("retained command executed: %v", sys.calls)
+	}
 
 	handler(rc, fakeMessage{topic: "win2mqtt/h/command/shutdown", payload: "shutdown"})
-	if len(sys.calls) != 1 || sys.calls[0] != "shutdown" {
+	waitFor(t, func() bool { return sys.callCount() == 1 })
+	if sys.calls[0] != "shutdown" {
 		t.Fatalf("live command not executed: %v", sys.calls)
 	}
+}
+
+// stuckToken never completes, like a publish whose TCP write has stalled.
+type stuckToken struct{ dummyToken }
+
+func (t *stuckToken) Wait() bool                       { select {} }
+func (t *stuckToken) WaitTimeout(d time.Duration) bool { time.Sleep(d); return false }
+func (t *stuckToken) Done() <-chan struct{}            { return make(chan struct{}) }
+
+type stuckClient struct{ dummyClient }
+
+func (c *stuckClient) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
+	return &stuckToken{}
+}
+
+func TestPublishReturnsWhenBrokerWriteStalls(t *testing.T) {
+	buf := captureLog(t)
+	old := publishTimeout
+	publishTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { publishTimeout = old })
+	sys, _ := newSystem()
+	a := newTestApp(t, sys)
+
+	done := make(chan struct{})
+	go func() {
+		a.publish(&stuckClient{}, "win2mqtt/h/status/x", false, "1")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publish blocked the caller on a stalled token")
+	}
+	if !strings.Contains(buf.String(), "timed out") {
+		t.Fatalf("expected a timeout log line, got:\n%s", buf.String())
+	}
+}
+
+func TestCommandCallbackReturnsBeforeCommandFinishes(t *testing.T) {
+	captureLog(t)
+	sys := newFakeSystem()
+	sys.blockLock = make(chan struct{})
+	a := newTestApp(t, sys)
+	rc := &recordingClient{}
+	a.subscribeCommands(rc)
+	handler := rc.subscribed["win2mqtt/h/command/#"]
+
+	returned := make(chan struct{})
+	go func() {
+		handler(rc, fakeMessage{topic: "win2mqtt/h/command/lock", payload: "lock"})
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("paho message handler blocked while the command ran")
+	}
+	close(sys.blockLock)
+	waitFor(t, func() bool { return sys.callCount() == 1 })
+}
+
+// waitFor polls cond for up to two seconds.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("condition not met in time")
 }

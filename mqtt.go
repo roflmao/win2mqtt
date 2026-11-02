@@ -11,6 +11,10 @@ import (
 
 const topicRoot = "win2mqtt"
 
+// publishTimeout bounds how long a publish may block the update loop; a stalled
+// broker write must not stop every other sensor from being refreshed.
+var publishTimeout = 5 * time.Second
+
 // app wires the config, the operating system and the MQTT client together.
 type app struct {
 	cfg           *config
@@ -43,7 +47,10 @@ func (a *app) publish(client mqtt.Client, topic string, retained bool, payload s
 	}
 
 	token := client.Publish(topic, 0, retained, payload)
-	token.Wait()
+	if !token.WaitTimeout(publishTimeout) {
+		log.Printf("Publish to %s timed out after %v", topic, publishTimeout)
+		return
+	}
 	if err := token.Error(); err != nil {
 		log.Printf("Error publishing to %s: %v", topic, err)
 	}
@@ -81,7 +88,9 @@ func (a *app) subscribeCommands(client mqtt.Client) {
 			log.Printf("Ignoring retained command %s", m.Topic())
 			return
 		}
-		a.handleCommand(c, m.Topic(), string(m.Payload()))
+		// Paho's ordered message router must not block: commands can take
+		// seconds (audio) or suspend the machine, and they publish replies.
+		go a.handleCommand(c, m.Topic(), string(m.Payload()))
 	})
 	token.Wait()
 	if err := token.Error(); err != nil {

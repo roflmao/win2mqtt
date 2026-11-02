@@ -8,11 +8,13 @@ on:
 permissions:
   contents: write
 
-# One release job at a time: overlapping jobs would compute the same next
-# version and the unforced CHANGELOG push of the later one would be rejected.
+# One release job at a time, every push kept: overlapping jobs would compute
+# the same next version and the unforced CHANGELOG push of the later one would
+# be rejected; the default single-slot queue would drop intermediate pushes.
 concurrency:
   group: release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   build-and-release:
