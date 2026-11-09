@@ -168,7 +168,8 @@ and the credentials in `%LOCALAPPDATA%\win2mqtt\win2mqtt.yaml`, then restart
 the task:
 
 ```powershell
-Restart-ScheduledTask -TaskName win2mqtt   # or: Stop-ScheduledTask / Start-ScheduledTask
+Stop-ScheduledTask -TaskName win2mqtt
+Start-ScheduledTask -TaskName win2mqtt
 ```
 
 To see whether the task is running at all:
