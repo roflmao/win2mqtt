@@ -116,6 +116,68 @@ To remove everything:
 .\install.ps1 -Uninstall
 ```
 
+### First start: SmartScreen and Defender
+
+The release binaries are not code-signed. Windows treats an unsigned file that
+was downloaded from the internet with suspicion:
+
+* **SmartScreen** shows "Windows protected your PC" if you double-click the exe.
+  The Scheduled Task normally starts it without that prompt, but to be safe clear
+  the download mark before installing:
+
+  ```powershell
+  Unblock-File .\win2mqtt.exe
+  ```
+
+  If the dialog does appear, choose *More info* and then *Run anyway*.
+* **Microsoft Defender** occasionally flags unsigned Go programs that call
+  power and lock APIs. If the task reports that it ran but the log file never
+  appears, open *Windows Security → Virus & threat protection → Protection
+  history*, look for `win2mqtt.exe`, choose *Allow on device*, and run
+  `install.ps1` again.
+
+Nothing else is needed. The program has no window and no tray icon; the log
+file and Home Assistant are the only places it shows up.
+
+### Checking that it is running
+
+Right after `install.ps1` finishes, follow the log:
+
+```powershell
+Get-Content -Wait "$env:LOCALAPPDATA\win2mqtt\win2mqtt.log"
+```
+
+A healthy start looks like this:
+
+```
+Started
+Version: v1.0.0
+Hostname: DESKTOP-AB12CD, user idle threshold: 300 seconds
+Connecting to MQTT broker at 192.168.1.10:1883 (attempt 1)
+Connected to MQTT
+Published Home Assistant MQTT discovery messages
+Auto-update enabled (checks every hour)
+```
+
+Within a few seconds the device appears in Home Assistant under
+*Settings → Devices & services → MQTT*. Press `Ctrl+C` to stop following the
+log; the program keeps running.
+
+If the log repeats `Failed to connect to MQTT`, check `mqtt_ip`, `mqtt_port`
+and the credentials in `%LOCALAPPDATA%\win2mqtt\win2mqtt.yaml`, then restart
+the task:
+
+```powershell
+Restart-ScheduledTask -TaskName win2mqtt   # or: Stop-ScheduledTask / Start-ScheduledTask
+```
+
+To see whether the task is running at all:
+
+```powershell
+Get-ScheduledTask -TaskName win2mqtt | Select-Object State
+Get-Process win2mqtt
+```
+
 ### Why a logon task and not a service
 
 A Windows service runs in session 0 and cannot see your desktop: no foreground
@@ -163,13 +225,26 @@ broker ACLs.
 * Installed: `%LOCALAPPDATA%\win2mqtt\win2mqtt.log`
 * Manual run: `win2mqtt.log` next to the exe
 
-Follow the log with:
+Follow the log live:
 
 ```powershell
 Get-Content -Wait "$env:LOCALAPPDATA\win2mqtt\win2mqtt.log"
 ```
 
-The file is truncated when it exceeds 5 MB at startup.
+Show only the last 50 lines:
+
+```powershell
+Get-Content -Tail 50 "$env:LOCALAPPDATA\win2mqtt\win2mqtt.log"
+```
+
+Open it in Notepad:
+
+```powershell
+notepad "$env:LOCALAPPDATA\win2mqtt\win2mqtt.log"
+```
+
+Set `debug: true` in `win2mqtt.yaml` and restart the task to log every MQTT
+publish. The file is truncated when it exceeds 5 MB at startup.
 
 ## Auto-update
 
