@@ -1,6 +1,13 @@
 # Changelog
 
 ```
+1.0.1   2026-11-09
+        [Patch]
+        * Wait for the log file after starting the task before showing it
+        * Use Stop and Start cmdlets for restarting the task in the README
+        * Document SmartScreen, Defender and how to check the log after install
+        * Remove committed Python cache file and ignore __pycache__
+
 1.0.0   2026-11-02
         [Patch]
         * Pin the release tag to the commit that was built
