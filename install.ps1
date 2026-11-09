@@ -101,4 +101,16 @@ Write-Info "Registered scheduled task $TaskName (runs at logon)"
 
 Start-ScheduledTask -TaskName $TaskName
 Write-Info "Started $TaskName"
-Write-Info "Log file: $(Join-Path $InstallDir 'win2mqtt.log')"
+
+# The task starts asynchronously; wait briefly for the log so the first lines can be shown.
+$logFile = Join-Path $InstallDir 'win2mqtt.log'
+$deadline = (Get-Date).AddSeconds(15)
+while (-not (Test-Path $logFile) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+if (Test-Path $logFile) {
+    Start-Sleep -Seconds 2
+    Write-Info "Log file: $logFile"
+    Get-Content -Tail 10 $logFile
+    Write-Info "Follow it with: Get-Content -Wait `"$logFile`""
+} else {
+    Write-Warning "win2mqtt.log did not appear within 15 seconds. Check Task Scheduler (task '$TaskName') and Windows Security > Protection history."
+}

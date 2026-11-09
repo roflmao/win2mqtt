@@ -141,10 +141,14 @@ file and Home Assistant are the only places it shows up.
 
 ### Checking that it is running
 
-Right after `install.ps1` finishes, follow the log:
+`install.ps1` waits for the first log lines to appear and prints them. To keep
+following the log afterwards (the task starts in the background, so wait for
+the file before tailing it):
 
 ```powershell
-Get-Content -Wait "$env:LOCALAPPDATA\win2mqtt\win2mqtt.log"
+$log = "$env:LOCALAPPDATA\win2mqtt\win2mqtt.log"
+while (-not (Test-Path $log)) { Start-Sleep -Milliseconds 500 }
+Get-Content -Wait $log
 ```
 
 A healthy start looks like this:
